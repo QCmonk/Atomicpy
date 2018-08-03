@@ -1,2 +1,2 @@
 # Atomicpy
-Simple simulation system for two level systems
+Simple simulation system for two level atomic systems.
