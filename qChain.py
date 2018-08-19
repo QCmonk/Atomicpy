@@ -6,7 +6,7 @@ import numpy as np
 from capy import *
 from utility import *
 from operators import *
-from qutip import Bloch
+#from qutip import Bloch
 from time import gmtime
 from IPython import embed
 import scipy.linalg as sla
@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 
 
 # define location of archive file
-archivepath = "C:\\Users\\joshm\\Documents\\Projects\\Code\\Python\\Modules\\pychain\\archive.h5"
+archivepath = "C:\\Users\\Joshua\\Documents\\Projects\\Code\\Python\\Modules\\qChain\\archive.h5"
 
 
 class SpinSystem(object):
@@ -22,13 +22,12 @@ class SpinSystem(object):
     class that defines a spin-[1/2, 1] system, keeping track of its state and evolution
     """
 
-    def __init__(self, spin: str="half", init=None, num: int=1):
+    def __init__(self, spin: str="half", init=None):
         # spin of system to be defined
         self.spin = spin
         # initial state of each particle [zero, one, super]
         self.init = init
-        # number of particles in system (careful with making this more than a couple
-        self.num = num
+        
 
         # initialise the system 
         self.initialise()
@@ -38,16 +37,22 @@ class SpinSystem(object):
         initialises the spin system
         """
         if self.spin == "half":
+            # dimension of system
+            self.dim = 2
+            # initial state
             self.state = op1["pz"]
         elif self.spin =="one":
+            # dimension of system
+            self.dim = 3
+            # initial state
             self.state = op2["po"]
 
         if self.init is not None: 
             if type(self.init) is str:
                 if self.init is "super":
-                    self.state = op1["h"]*self.state
+                    self.state = op1["h"] @ self.state
                 elif self.init is "isuper":
-                    self.state = op1["s"]*op1["h"]*self.state
+                    self.state = op1["s"] @ op1["h"] @ self.state
                 elif self.init is "zero":
                     self.state = op1["pz"]
                 elif self.init is "one":
@@ -56,7 +61,7 @@ class SpinSystem(object):
                     raise ValueError("Unrecognised initial state: {}".format(self.init))
             else:
                 # custom start state
-                self.state = np.asarray(self.init)
+                self.state = np.matrix(self.init)
             
     def evolve(self, unitary, save=False):
         """
@@ -65,10 +70,10 @@ class SpinSystem(object):
         
         # evolve state 
         if save:
-            self.state = np.dot(unitary, self.state)
+            self.state = unitary @ self.state
             return self.state
         else:
-            return np.dot(unitary, self.state)
+            return unitary @ self.state
 
     def measure(self, state=None, project=np.asarray([[1,0]])):
         """
@@ -79,17 +84,16 @@ class SpinSystem(object):
 
         return np.abs(np.dot(project, state))**2
 
-    def state_evolve(self, hamiltonian, t=[0,1,1e-3], bloch=[False, 10], **kwargs):
+    def state_evolve(self, hamiltonian, t=[0,1,1e-3], cache=True, bloch=[False, 10], **kwargs):
         """
         computes the probability of finding the system in the projection state over the given range
         """
         if len(t)<3: t.append(1e-3)
-        # compute number of time steps 
-        steps = int((t[1] - t[0])/t[2])
-        # preallocate probability array
-        probs = np.zeros((steps), dtype=np.float64)
         # time array
-        time = np.linspace(t[2], t[1], steps)   
+        time = np.arange(t[0], t[1], t[2])   
+        self.time = time
+        # preallocate probability array
+        probs = np.zeros((len(time)), dtype=np.float64)
         # create list for snap shot states to plot
         if bloch:
             bloch_points = []
@@ -101,22 +105,51 @@ class SpinSystem(object):
         else:
             flag = False 
             unitary = sla.expm(-1j*hamiltonian*t[2]/hbar)
+        
+        if cache and flag:
+            # create hamiltonian cache to reduce repeated call overhead
+            h_cache = hamiltonian(time)
+            u_cache = [myexpm(-1j*h_cache[:,:,i]*t[2]/hbar) for i in range(len(time)) if i!=0]
+            state_cache = np.zeros((2,1,len(time)), dtype=np.complex128)
 
-        # compute unitary in a piecewise fashion
-        for i,tstep in enumerate(time):
-            if flag:
-                unitary = sla.expm(-1j*hamiltonian(tstep)*t[2]/hbar)
+            # add initial state to caches
+            state_cache[:,:,0] = self.state
+            probs[0] = self.measure(state_cache[:,:,0], **kwargs)
 
-            # compute measurement probablity of projector
-            probs[i] = self.measure(state=self.evolve(unitary, save=True), **kwargs)
-            # add state to bloch plot
-            if bloch[0] and i % bloch[1] == 0:
-                bloch_points.append(self.get_bloch_vec(np.outer(self.state.H, self.state)))
+            # iterate through cached hamiltonians
+            for j,tstep in enumerate(time):
+                if j!=0:
+                    # compute measurement probablity of projector
+                    state_cache[:,:,j] = self.evolve(u_cache[j-1], save=True)
+                    probs[j] = self.measure(state=state_cache[:,:,j], **kwargs)
+
+                # add state to bloch plot
+                if bloch[0] and j % bloch[1] == 0:
+                    bloch_points.append(self.get_bloch_vec(np.outer(self.state.H, self.state)))
+            
+            # save caches
+            self.h_cache = h_cache
+            self.u_cache = u_cache
+            self.state_cache = state_cache
+
+        else:
+            # compute unitary in a piecewise fashion (this would be really easy to parellise but I probably shouldn't)
+            for i,tstep in enumerate(time):
+                print(tstep)
+                if flag:
+                    unitary = expm_eig(-1j*hamiltonian(tstep)/hbar, t[2])
                 
+                # compute measurement probablity of projector
+                probs[i] = self.measure(state=self.evolve(unitary, save=True), **kwargs)
+                # add state to bloch plot
+                if bloch[0] and i % bloch[1] == 0:
+                    bloch_points.append(self.get_bloch_vec(np.outer(self.state.H, self.state)))
+                    
                 
         # plot evolution on the Bloch sphere
         if bloch:
             # convert to qutips annoying format
+            # TODO: preallocate
             x,y,z = [],[],[]
             for vec in bloch_points:
                 x.append(vec[0])
@@ -127,6 +160,74 @@ class SpinSystem(object):
             return time, probs, bloch_points
         else:
             return time, probs
+
+    def frame_transform(self, cstate=None, frame=["interaction", "lab"], project=meas1["0"], bloch=[False, 10]):
+        """
+        EXPERIMENTAL
+        Transform a state or set of states to a specified reference frame from another. This method
+        is still in the experimental phase. It works well for going from simpler reference frames to
+        complicated oned but the reverse is prone to numerical instability. 
+        """
+        if cstate is None:
+            cstate = np.copy(self.state_cache)
+
+        # compute reference frame map
+        if callable(frame):
+            unitary_map = frame
+        # determine transition case and define appropriate time dependent unitary operator
+        elif frame[0] == "lab":
+            if frame[1] == "interaction":
+                def unitary_map(t, larmor=gyro): 
+                    return np.asarray([[np.exp(1j*np.pi*larmor*t), 0], [0, np.exp(-1j*np.pi*larmor*t)]])
+            elif frame == "dressed":
+                # define dressed state transform
+                def dressed(t, omega=1e4, detuning=0): return np.asarray([[np.cos(np.arctan(
+                    omega/detuning)/2), -np.sin(np.arctan(omega/detuning)/2)], [np.sin(np.arctan(omega/detuning)/2), np.cos(np.arctan(omega/detuning)/2)]])
+
+                def unitary_map(t, larmor=larmor): return dressed(t) @ np.asarray([[np.exp(1j*np.pi*larmor*t), 0], [0, np.exp(-1j*np.pi*larmor*t)]])
+            else:
+                raise ValueError("Unrecognised output reference frame")
+
+        elif frame[0] == "interaction":
+            if frame[1] == "lab":
+                def unitary_map(t, larmor=gyro): 
+                    return np.asarray([[np.exp(-1j*np.pi*larmor*t), 0], [0, np.exp(1j*np.pi*larmor*t)]])
+            elif frame == "dressed":
+                # define dressed state transform
+                def unitary_map(t, omega=1e4, detuning=0): return np.asarray([[np.cos(np.arctan(
+                    omega/detuning)/2), np.sin(np.arctan(omega/detuning)/2)], [-np.sin(np.arctan(omega/detuning)/2), np.cos(np.arctan(omega/detuning)/2)]])
+            else:
+                raise ValueError("Unrecognised output reference frame")
+
+        elif frame[0] == "dressed":
+            if frame[1] == "interaction":
+                def unitary_map(t, larmor=gyro): 
+                    return np.asarray([[np.cos(np.arctan(omega/detuning)/2), -np.sin(np.arctan(omega/detuning)/2)], [np.sin(np.arctan(omega/detuning)/2), np.cos(np.arctan(omega/detuning)/2)]])
+            elif frame == "lab":
+                # define dressed state transform
+                def dressed(t, omega=1e4, detuning=0): return np.asarray([[np.cos(np.arctan(
+                    omega/detuning)/2), -np.sin(np.arctan(omega/detuning)/2)], [np.sin(np.arctan(omega/detuning)/2), np.cos(np.arctan(omega/detuning)/2)]])
+
+                def unitary_map(t, larmor=larmor): return dressed(t) @ np.asarray([[np.exp(1j*np.pi*larmor*t), 0], [0, np.exp(-1j*np.pi*larmor*t)]])
+            else:
+                raise ValueError("Unrecognised output reference frame")
+
+        else:
+            raise ValueError("Unrecognised input reference frame")
+
+        # apply transform to states
+        if len(np.shape(cstate))==3:
+            new_states = [unitary_map(t) @ cstate[:,:,step] for step,t in enumerate(self.time)]
+            nprobs = np.squeeze([np.abs(project @ nstate)**2 for i,nstate in enumerate(new_states)])
+            # save new states and projection probabilities
+            self.state_cache = new_states
+            self.probs = nprobs
+        else:
+            new_states = unitary_map(self.time[-1]) @ cstate
+            return new_states
+
+
+
 
     def bloch_plot(self, points=None):
         """
@@ -314,7 +415,13 @@ class Hamiltonian(object):
         # enforce function type
         for field in fields: assert callable(field), "Field {} must be callable".format(i)
         # redundant constants for clarity
-        self.hamiltonian = lambda t: 0.5*hbar*gyro*2*np.pi*(fields[0](t)*op1["x"] + fields[1](t)*op1["y"] + fields[2](t)*op1["z"])
+        self.hamiltonian = lambda t: 0.5*hbar*2*np.pi*(fields[0](t)*op1["x"] + fields[1](t)*op1["y"] + fields[2](t)*op1["z"])
+
+        # cache version of hamiltonian
+        def hamiltonian2(time):
+            return 0.5*hbar*2*np.pi*np.asarray([[fields[2](time), fields[0](time)+1j*fields[1](time)],
+                                                    [fields[0](time)-1j*fields[1](time), -1*fields[2](time)]])
+        self.hamiltonian_cache = hamiltonian2
 
 
     def bloch_field(self, time):
@@ -346,6 +453,9 @@ def data_retrieval(sim_params):
     """
     Retrieves a data set from the archive if it has already been simulated with identical parameters
     """
+
+    #TODO: Fix this mess
+
     # define base name for retrieval
     root_group = "Atomic_Sense" 
     
@@ -359,18 +469,28 @@ def data_retrieval(sim_params):
         else:
             atomic_sense = archive[root_group]
 
-        
+        # iterate through parameter list
         for dataset in atomic_sense:
             flag = False
             for key,val in sim_params.items():
-                if atomic_sense[dataset].attrs[key] == val:
-                    flag = True
+
+                # check for equivalency between floats
+                if isinstance(val, float):
+                    if np.isclose(atomic_sense[dataset].attrs[key], val):
+                        flag = True
+                    else:
+                        flag = False
+                        break
                 else:
-                    flag = False
-                    break
+                    if atomic_sense[dataset].attrs[key] == val:
+                        flag = True
+                    else:
+                        flag = False
+                        break
             if flag:
                 print("Data set found in archive")
                 # get sensor data
+                print(dataset)
                 return np.asarray(atomic_sense[dataset])
         else:
             print("Data set not found in archive")
@@ -381,6 +501,7 @@ def data_store(sim_params, data, name=None, verbose=True):
     """
     Stores a simulation instance 
     """
+
     # define base name for retrieval
     root_group = "Atomic_Sense"
     # turn parameter set into name string
@@ -421,7 +542,19 @@ def pseudo_fourier(struct, sig_amp=1, sig_freq=360, f_range=[250,450, 1], sig=No
     """
     Computes the projection |<1|psi>|^2 of a two level system for a given point in the signal parameter space with different frequency tunings
     """
-    
+
+    # define magnetic fields
+    pulse = pulse_gen(freq=341, tau=[1e-2], amp=20)
+
+    # set detune max value
+    detune_max = 5e4
+    # time at which detuning sweep occurs
+    detune_tau = 4e-4
+    # time for sweep to occur
+    swt = 0.01
+    # bias field strength
+    bias_amp = gyro
+
     # create parameter dictionary
     sim_params = {"struct": struct, 
                   "sig_amp": sig_amp,
@@ -431,7 +564,7 @@ def pseudo_fourier(struct, sig_amp=1, sig_freq=360, f_range=[250,450, 1], sig=No
                   "f_range_step": f_range[2],
                   "num": len(tau)}
 
-    result = data_retrieval(sim_params)
+    result = None #data_retrieval(sim_params)
     if result is None:
         # projection array
         projs = []
@@ -441,13 +574,20 @@ def pseudo_fourier(struct, sig_amp=1, sig_freq=360, f_range=[250,450, 1], sig=No
         ham = Hamiltonian()
         for freq in freqs:
             if verbose:
-                print("Computing evolution with tuning frequency: {:.2f} Hz".format(freq))
+                print("Computing evolution with tuning frequency: {:.2f} Hz\r".format(freq), end="",flush=True)
+
+            def Bx(t, omega_amp=freq): return omega_amp*(t/t)
+            def By(t): return 0
+            def Bz(t): return  pulse(t)
+
+    
+
             # define magnetic field vector parameters
-            params = {"struct": [struct, "sinusoid", "constant"], 
+            params = {"struct": ["custom", "constant", "custom"], 
                       "freqb": [sig_freq, 50, 0],          # frequency in Hz
                       "tau": [tau, None, None],          # time event of pulse
-                      "amp":[sig_amp/gyro, 0/gyro, freq/gyro], # amplitude in Gauss -> 1 Gauss ~= 700000 Hz precession
-                      "misc": [sig, None,None]}          # misc parameters
+                      "amp":[sig_amp, 0, freq], # amplitude in Gauss -> 1 Gauss ~= 700000 Hz precession
+                      "misc": [Bz, None, Bx]}          # misc parameters
             # generate magentic fields
             fields = field_gen(field_params=params)
             # compute Hamiltonian for updated magnetic field
@@ -455,7 +595,8 @@ def pseudo_fourier(struct, sig_amp=1, sig_freq=360, f_range=[250,450, 1], sig=No
             # redefine atom spin system
             atom = SpinSystem(init="super")
             # evolve state using hamiltonian
-            time, probs, pnts = atom.state_evolve(t=[0, t, 1/5e4], hamiltonian=ham.hamiltonian, project=meas1["1"], bloch=[False, 5])
+            time, probs, pnts = atom.state_evolve(t=[1e-44, t, 1/2e5], hamiltonian=ham.hamiltonian_cache, project=meas1["1"], bloch=[False, 5])
+            #atom.frame_transform(project=meas1["0"])
             projs.append(probs[-1])
 
         projs = np.asarray(projs)
@@ -470,9 +611,9 @@ def pseudo_fourier(struct, sig_amp=1, sig_freq=360, f_range=[250,450, 1], sig=No
         signal_matrix[3,:] = fields[2](time)
 
         sim_params["name"] = "Fourier"
-        data_store(sim_params, data=data_matrix, name="_Fourier_measurements")
+        #data_store(sim_params, data=data_matrix, name="_Fourier_measurements")
         sim_params["name"] = "Field"
-        data_store(sim_params, data=data_matrix, name="_Field_signal")
+        #data_store(sim_params, data=data_matrix, name="_Field_signal")
 
     else:
         freqs = result[0,:]
@@ -481,7 +622,7 @@ def pseudo_fourier(struct, sig_amp=1, sig_freq=360, f_range=[250,450, 1], sig=No
         params = {"struct": [struct, "constant", "constant"], 
                   "freqb": [sig_freq, 0, 0],          # frequency in Hz
                   "tau": [tau, None, None],          # time event of oulse
-                  "amp":[sig_amp/gyro, 0, 0], # amplitude in Gauss -> 1 Gauss ~= 700000 Hz precession
+                  "amp":[sig_amp, 0, 0], # amplitude in Gauss -> 1 Gauss ~= 700000 Hz precession
                   "misc": [sig, None,None]}          # misc parameters
         # generate magentic fields
         fields = field_gen(field_params=params)
@@ -499,9 +640,4 @@ def pseudo_fourier(struct, sig_amp=1, sig_freq=360, f_range=[250,450, 1], sig=No
         plt.show()
 
     return np.asarray(freqs), np.asarray(projs), fields[0]
-
-
-
-
-
 

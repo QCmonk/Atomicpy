@@ -1,5 +1,3 @@
-
-
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -14,25 +12,27 @@ mub = (9.274009994e-24)/1e4
 gm = 2.00231930436
 # Gyromagnetic ratio
 gyro = 699.9e3
+# pi is pi
+pi = np.pi
 
 # identity matrix
-_ID = np.matrix([[1, 0], [0, 1]])
+_ID = np.asarray([[1, 0], [0, 1]])
 # X gate
-_X = np.matrix([[0, 1], [1, 0]])
+_X = np.asarray([[0, 1], [1, 0]])
 # Z gate
-_Z = np.matrix([[1, 0], [0, -1]])
+_Z = np.asarray([[1, 0], [0, -1]])
 # Hadamard gate
-_H = (1/np.sqrt(2))*np.matrix([[1, 1], [1, -1]])
+_H = (1/np.sqrt(2))*np.asarray([[1, 1], [1, -1]])
 # Y Gate
-_Y = np.matrix([[0, -1j], [1j, 0]])
+_Y = np.asarray([[0, -1j], [1j, 0]])
 # S gate
-_S = np.matrix([[1, 0], [0, 1j]])
+_S = np.asarray([[1, 0], [0, 1j]])
 # Sdg gate
-_Sdg = np.matrix([[1, 0], [0, -1j]])
+_Sdg = np.asarray([[1, 0], [0, -1j]])
 # T gate
-_T = np.matrix([[1, 0], [0, (1 + 1j)/np.sqrt(2)]])
+_T = np.asarray([[1, 0], [0, (1 + 1j)/np.sqrt(2)]])
 # Tdg gate
-_Tdg = np.matrix([[1, 0], [0, (1 - 1j)/np.sqrt(2)]])
+_Tdg = np.asarray([[1, 0], [0, (1 - 1j)/np.sqrt(2)]])
 # CNOT gate
 _CX = np.matrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0]])
 # zero state
