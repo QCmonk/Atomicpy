@@ -1,14 +1,38 @@
 import numpy as np
-from numpy.linalg import eig, inv
+from scipy.signal import hilbert
+from numpy.linalg import eigh, inv
 from operators import *
 import scipy.sparse as ssp
 import matplotlib as mpl
 import scipy.linalg as sla
+import scipy.signal
+from time import gmtime
+import json
 import matplotlib.pyplot as plt
-
-
 mpl.rcParams['figure.figsize'] = 16, 9
 
+
+# TODO: Epsilon reconstruction search (100 values)
+#       Error metric for reconstructions (RMSE?)
+
+
+
+def dict_write(path, rdict):
+    """
+    Writes a dictionary to a text file at location <path>
+    """
+    date = gmtime()
+    name = "{}_{}_{}_{}_{}_{}".format(date.tm_year,date.tm_mon, date.tm_mday, date.tm_hour, date.tm_min, date.tm_sec)
+
+    # convert everything to a fucking string
+    for key in rdict:
+        rdict[key] = str(rdict[key])
+
+    # write to file
+    with open(path+name+".json", 'a') as file:
+        json.dump(rdict, file)
+    
+    return name
 
 # define rectangular function centered at 0 with width equal to period
 def rect(period, time):
@@ -61,120 +85,49 @@ def unitary_concat(cache, index):
     return unitary
 
 
-def cexpm_fast(h_cache, time, batch_size=500):
+
+def dict_sanitise(params):
     """
-    Currently not working and not going to fix because it is slower than piecewise!
-    Computes matrix exponential for h_cache in fast batches as exp(h_cache[t]*t).
-    Does NOT include complex factors.
+    Function that ensures no Value errors for C dict retrieval
     """
-    # ensure that h_cache is a sparse matric
-    if not isinstance(h_cache, list):
-        raise TypeError(
-            "Hamiltonian cache must be a list not {}".format(type(h_cache)))
-    # ensure time vector dimension equals that of hamiltonian number
-    if len(time) != len(h_cache):
-        raise ValueError("Dimension mismatch of time vector and number of Hamiltonians: {} != {}".format(
-            len(time), len(h_cache)))
+    # set parameter dictionary to defaults if not specified
+    cparams = {"tstart": 0.0,
+               "tend":  1e-4,
+               "dt":    1e-5, 
+               "larmor": gyro, 
+               "phi": 0, 
+               "rabi": 0, 
+               "rff": 0, 
+               "rph": 0,
+               "proj": meas1["0"], 
+               "dett": 1e4,
+               "detA": 0,
+               "dete": 1,
+               "xlamp": 0.0,
+               "xlfreq": 50,
+               "xlphase": 0.0,
+               "zlamp": 0.0,
+               "zlfreq": 50,
+               "zlphase": 0.0,
+               "beta": 10, 
+               "nt": 1e4, 
+               "nf": 1, 
+               "sA": 0.0}
 
-    # compute number of batches required
-    batch_num = int(np.ceil(len(h_cache)/batch_size))
-    u_cache = np.zeros((2,2,len(h_cache)), dtype=np.complex128)
-    # compute matrix exponential in batches
-    for b in range(batch_num):
-        # extract batch sequence and convert to sparse block diagonal
-        batch = ssp.block_diag(h_cache[b*batch_size: (b+1)*batch_size])
-        # extract time range and double to fit eigenavlue
-        t_batch = np.repeat(time[b*batch_size: (b+1)*batch_size], repeats=2)
-        # compute eigenvalues and vectors of batch
-        e,V = np.linalg.eigh(batch.todense())
-        print(batch)
+    # overwrite defaults
+    for p in cparams.keys():
+        # default value to zero (kills all not specified components)
+        if p not in params.keys():
+            cparams[p] = 0.0
+        else:
+            cparams[p] = params[p]
 
-        V = ssp.csc_matrix(V)
-        # compute diagonal exponential 
-        D = ssp.diags(np.exp(np.multiply(t_batch, e)))
-        # compute matrix exponential
-        batch_exp = V.dot(D.dot(ssp.linalg.inv(V))) 
-        # extract diagonals (retrieving blocks is super annoying)
+    # set end spike default so a single spike occurs
+    if 'nte' not in cparams.keys():
+        cparams["nte"] = cparams["nt"] + 1/cparams["nf"]    
 
-        # assign main diagonal to cache (even)
-        u_cache[0,0,b*batch_size:(b+1)*batch_size] = batch_exp.diagonal()[::2]
-        # assign main diagonal to cache (off)
-        u_cache[1,1,b*batch_size:(b+1)*batch_size] = batch_exp.diagonal()[1::2]
-        # assign off diagonal
-        u_cache[0,1,b*batch_size:(b+1)*batch_size] = batch_exp.diagonal(k=1)[::2]
-        u_cache[1,0,b*batch_size:(b+1)*batch_size] = batch_exp.diagonal(k=-1)[::2]
+    return cparams
 
-    return u_cache
-
-
-# a = -1j*np.asarray([[gyro/2, 2],[2, -gyro/2]])
-# b = [a]*11000
-# time = [0.01]*len(b)
-# print(sla.expm(a))
-# print(cexpm_fast(b,time)[:,:,0])
-
-
-def expm_eig(A, t):
-    """
-    Fast computation of exp(A*t) for 2x2 matrices.
-    """
-    # compute eigenvalues of A
-    e, V = eig(A)
-    # compute eigenvector inverse
-    Vinv = inv(V)
-    # compute exponential of eigenvalues
-    E = np.zeros((2, 2), dtype=np.complex128)
-    for i in range(2):
-        E[i, i] = np.exp(e[i]*t)
-    return V @ E @ Vinv
-
-
-def myexpm(m):
-    a, b, c, d = m[0,0], m[0,1], m[1,0], m[1,1]
-    delta = np.sqrt((a-d)*(a-d) + 4*b*c)
-    C1 = np.exp(0.5*(a+d)) / delta
-    C2 = np.sinh(0.5*delta)
-    C3 = np.cosh(0.5*delta)
-    m00 = C1*(delta*C3+(a-d)*C2)
-    m01 = 2*b*C1*C2
-    m10 = 2*c*C1*C2
-    m11 = C1*(delta*C3+(d-a)*C2)
-    return np.array([[m00,m01],[m10,m11]])
-
-
-from timeit import timeit
-from scipy.linalg import expm
-
-def expm_eig(A, t):
-    """
-    Fast computation of exp(A*t) for 2x2 matrices.
-    """
-    # compute eigenvalues of A
-    e, V = eig(A)
-    # compute eigenvector inverse
-    Vinv = inv(V)
-    # compute exponential of eigenvalues
-    E = np.zeros((2, 2), dtype=np.complex128)
-    for i in range(2):
-        E[i, i] = np.exp(e[i]*t)
-    return V @ E @ Vinv
-
-
-def myexpm(m):
-    a, b, c, d = m[0,0], m[0,1], m[1,0], m[1,1]
-    delta = np.sqrt((a-d)*(a-d) + 4*b*c)
-    C1 = np.exp(0.5*(a+d)) / delta
-    C2 = np.sinh(0.5*delta)
-    C3 = np.cosh(0.5*delta)
-    m00 = C1*(delta*C3+(a-d)*C2)
-    m01 = 2*b*C1*C2
-    m10 = 2*c*C1*C2
-    m11 = C1*(delta*C3+(d-a)*C2)
-    return np.array([[m00,m01],[m10,m11]])
-
-#print("scipy.linalg.expm run {:d} times takes {:f} seconds".format(timereps, timeit("expm(data[0])", number=timereps, setup="from __main__ import data,expm")))
-#print("expm_eig run {:d} times takes {:f} seconds".format(timereps, timeit("expm_fast(data[0],0.01)", number=timereps,setup="from __main__ import data, expm_eig")))
-#print("myexpm run {:d} times takes {:f} seconds".format(timereps, timeit("myexpm(data[0]*0.01)", number=timereps, setup="from __main__ import data,myexpm")))
 
 def state2pnt(cache):
     """
@@ -247,8 +200,36 @@ def stability_measure(time, omega, detune):
     pass
 
     
+def demodulate(time, signal, cfreq, fs):
+    """
+    Performs simple demodulation of an input signal given carrier
+    frequency <cfreq> and sample rate <fs>.
+    """
+    
+    carrier_cos = np.cos(2*np.pi*cfreq*time)
+    carrier_sin = np.sin(2*np.pi*cfreq*time)
 
-def pulse_gen(freq=100, tau=[1.0], amp=1):
+    csignal = carrier_cos*signal
+    ssignal = carrier_sin*signal
+
+    # simple butterworth with cutoff at 2*cfreq
+    Wn = 2*cfreq/fs
+    b,a = scipy.signal.butter(3, Wn)
+
+
+    filt_cos = scipy.signal.lfilter(b,a, csignal)
+    filt_sin = scipy.signal.lfilter(b,a, ssignal)
+
+
+    plt.plot(time, filt_cos, label='Filtered Cosine')
+    plt.plot(time, filt_sin, label='Filtered Sine')
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+
+
+
+def pulse_gen(freq=100, tau=[1.0], amp=1, nte=[None]):
     """
     Generates a multipulse signal with a pretty neat dynamic approach
     """
@@ -267,10 +248,15 @@ def pulse_gen(freq=100, tau=[1.0], amp=1):
     # list to hold spike functions
     terms = []
 
-    for time in tau:
-        # generate spike functions, avoiding variable reference issue
-        terms.append(lambda t, tau=time: box(t, tau, tau+1/freq)
-                     * amp*np.sin(2*np.pi*freq*(t-tau)))
+    for time,end in zip(tau,nte):
+        if end is None:
+            # generate spike functions, avoiding variable reference issue
+            terms.append(lambda t, tau=time: box(t, tau, tau+1/freq)
+                         * amp*np.sin(2*np.pi*freq*(t-tau)))
+        else:
+            # generate spike functions, avoiding variable reference issue
+            terms.append(lambda t, tau=time: box(t, tau, end)
+                         * amp*np.sin(2*np.pi*freq*(t-tau)))
 
     # generate final signal function
     signal = lambda t, funcs=terms: sig_sum(t, funcs)
@@ -309,16 +295,18 @@ def input_output(f_range=[200, 400, 2], sig_range=[300, 400, 2], t=[0, 1/10, 1/1
     return source, sensor
 
 
-def plot_gen_1(freqs, projs, time, signal):
+def plot_gen_1(freqs, projs, time, sim_vars):
     """
     Generates publication ready plots using compressive atomic sensing
     """
+    signal = pulse_gen(sim_vars["sig_freq"], tau=[sim_vars["tau"]], amp=sim_vars["sig_amp"], nte=[sim_vars["nte"]])
+
     plt.style.use('dark_background')
     plt.subplot(2, 1, 1)
     plt.plot(time, signal(time), 'g-')
     # plt.grid(True)
     plt.title("Magnetic field signal", fontsize=18)
-    plt.ylim([-1.6e-6, 1.6e-6])
+    plt.ylim([-1, 1])
     plt.ylabel("Amplitude (G)", fontsize=14)
     plt.ticklabel_format(style='sci', axis='y', scilimits=(0, 3))
     plt.xlabel("Time (s)", fontsize=14)
@@ -328,21 +316,56 @@ def plot_gen_1(freqs, projs, time, signal):
     plt.plot(freqs, projs, 'o-', linewidth=0.6, alpha=0.3,)
     plt.ylabel("$|\langle 1 | \psi(t) \\rangle |^2 $", fontsize=16)
     plt.xlabel("Tuning frequency (Hz)", fontsize=14)
-    plt.savefig("original.png", dpi=2000)
+    plt.savefig("original.png", dpi=1500)
     # plt.grid(True)
     plt.show()
 
+def signal_generate(time, sim_vars):
+    """
+    Generates the neural signal defined by sim_vars
+    """
+    # assume single pulse if not defined
+    if "nte" not in sim_vars.keys():
+        nte = sim_vars["tau"] + 1/sim_vars["sig_freq"]
+        sim_vars["nte"] = nte
 
-def plot_gen_2(freqs, projs, comp_f, comp_p, time, recon, measurements):
+    signal = pulse_gen(sim_vars["sig_freq"], tau=[sim_vars["tau"]], amp=sim_vars["sig_amp"], nte=[sim_vars["nte"]])
+    signal = signal(time)
+    signal /= np.max(np.abs(signal))
+
+    return signal
+
+
+def rmse(v1,v2):
+    """
+    Computes RMSE between two input vectors
+    """
+    return np.sqrt(np.mean((v1-v2)**2))
+
+def plot_gen_2(freqs, projs, comp_f, comp_p, time, recon, sim_vars, savefig=False):
     """
     Generates publication ready plots using compressive atomic sensing
     """
-    plt.style.use('dark_background')
+    # generate original signal
+    signal = pulse_gen(sim_vars["sig_freq"], tau=[sim_vars["tau"]], amp=sim_vars["sig_amp"], nte=[sim_vars["nte"]])
+    signal = signal(time)
+    signal /= np.max(np.abs(signal))
+    recon /= np.max(np.abs(recon))
+
+    # format projections to expectation value
+    projs = 2*projs - 1
+    comp_p = 2*comp_p - 1
+    # get number of measuremens used
+    measurements = sim_vars["measurements"]
+
+    #plt.style.use('dark_background')
     plt.subplot(2, 1, 1)
+    plt.plot(time, signal, 'g-')
     plt.plot(time, recon, 'r-')
-    plt.title("Magnetic field signal reconstruction with {} Fourier measurements".format(
-        measurements), fontsize=18)
-    plt.ylabel("Amplitude (G)", fontsize=14)
+    plt.legend(["Original","Reconstruction"])
+    plt.title("Magnetic field signal reconstruction with {} Fourier measurements using \"{}\" method".format(
+        measurements, sim_vars["method"]), fontsize=18)
+    plt.ylabel(r"Amplitude", fontsize=14)
     plt.ticklabel_format(style='sci', axis='y', scilimits=(0, 3))
     plt.xlabel("Time (s)", fontsize=14)
 
@@ -351,7 +374,13 @@ def plot_gen_2(freqs, projs, comp_f, comp_p, time, recon, measurements):
     plt.plot(freqs, projs, 'o-', alpha=0.3, linewidth=0.6, label="_nolegend_")
     plt.plot(comp_f, comp_p, 'r*', linewidth=1.5, label="Sample frequencies")
     plt.legend()
-    plt.ylabel("$|\langle 1 | \psi(t) \\rangle |^2 $", fontsize=16)
+    plt.ylabel(r"$\langle F_z \rangle  $", fontsize=16)
     plt.xlabel("Tuning frequency (Hz)", fontsize=14)
-    plt.savefig("reconstruction.png", dpi=2000)
+    plt.figure(num=1, figsize=[12,9])
+    if savefig:
+        path = "C:\\Users\\Joshua\\Research\\Uni\\2018\\Project\\Latex\\Proj_Figures\\"
+        # save parameters to text file
+        fig_name = dict_write(path, sim_vars)
+        plt.savefig(path+fig_name+".png", transparent=True, dpi=1000)
+
     plt.show()

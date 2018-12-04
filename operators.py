@@ -36,9 +36,9 @@ _Tdg = np.asarray([[1, 0], [0, (1 - 1j)/np.sqrt(2)]])
 # CNOT gate
 _CX = np.matrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0]])
 # zero state
-_pz = np.matrix([[1],[0]])
+_pz = np.asarray([1,0], dtype=np.complex128)
 # one state
-_po = np.matrix([[0],[1]])
+_po = np.asarray([0, 1], dtype=np.complex128)
 
 
 
@@ -66,10 +66,10 @@ op2 = {
 
 
 # measurement projections for spin 1/2
-meas1 = {"0":np.asarray([[1,0]]),
-		 "1":np.asarray([[0,1]]),
-		 "+":np.asarray([[1,1]]/np.sqrt(2)),
-		 "-":np.asarray([[1,-1]]/np.sqrt(2)),
-		 "+i":np.asarray([[1,1j]]/np.sqrt(2)),
-		 "-i":np.asarray([[1,-1j]]/np.sqrt(2)),
+meas1 = {"0":np.asarray([1,0], dtype=np.complex128),
+		 "1":np.asarray([0,1], dtype=np.complex128),
+		 "+":np.asarray([1,1]/np.sqrt(2), dtype=np.complex128),
+		 "-":np.asarray([1,-1]/np.sqrt(2), dtype=np.complex128),
+		 "+i":np.asarray([1,1j]/np.sqrt(2), dtype=np.complex128),
+		 "-i":np.asarray([1,-1j]/np.sqrt(2), dtype=np.complex128),
 		}
