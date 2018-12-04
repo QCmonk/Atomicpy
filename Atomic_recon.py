@@ -59,19 +59,19 @@ if __name__ == "__main__":
     #             "savef":             5000,
     #             "fs":               2.2e4}           # sasvempling rate for measurement transform
 
-    # define user parameters for simulation run
-    sim_vars = {"measurements":        40,           # number of measurements
-                "epsilon":           0.01,           # radius of hypersphere in measurement domain
-                "sig_amp":             10,           # amplitude of magnetic field signal in Gauss/Hz
-                "sig_freq":          1000,           # frequency of magnetic field signal
-                "tau":               0.01,           # time events of pulses
-                "f_range":   [900,1100,1],            # frequency tunings of BECs
-                "noise":             0.00,           # noise to add to measurement record SNR percentage e.g 0.1: SNR = 10
-                "zlamp":                0,
-                "zlfreq":            1000,
-                "method":       "default",
-                "savef":             5000,
-                "fs":               2.2e4}           # sasvempling rate for measurement transform
+    # # define user parameters for simulation run
+    # sim_vars = {"measurements":        40,           # number of measurements
+    #             "epsilon":           0.01,           # radius of hypersphere in measurement domain
+    #             "sig_amp":             10,           # amplitude of magnetic field signal in Gauss/Hz
+    #             "sig_freq":          1000,           # frequency of magnetic field signal
+    #             "tau":               0.01,           # time events of pulses
+    #             "f_range":   [900,1100,1],            # frequency tunings of BECs
+    #             "noise":             0.00,           # noise to add to measurement record SNR percentage e.g 0.1: SNR = 10
+    #             "zlamp":                0,
+    #             "zlfreq":            1000,
+    #             "method":       "default",
+    #             "savef":             5000,
+    #             "fs":               2.2e4}           # sasvempling rate for measurement transform
 
 
 
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     #erange = np.linspace(0.0,0.05, 50)
     #epsilon_find(sim_vars, erange)
 
-    bfreqs1, projs1 = recon_pulse(sim_vars, plot=True, savefig=True)
+    #bfreqs1, projs1 = recon_pulse(sim_vars, plot=True, savefig=True)
     
     # sim_vars["zlamp"] = 0
     # bfreqs2, projs2 = recon_pulse(sim_vars, plot=False) v 
@@ -94,7 +94,7 @@ if __name__ == "__main__":
     # plt.xlabel("Rabi Frequency (Hz)")
     # plt.figure(num=1, figsize=[16,9])
     # plt.show()
-    exit()
+    #exit()
     ###############################################
     
 
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     # # set the bajillion simulation parameters. There simply isn't a better way to do this. 
     # # define generic Hamiltonian parameters with Zeeman splitting and rf dressing
     params = {"tstart":        0,              # time range to simulate over
-              "tend":        0.5,
+              "tend":       1e-3,
               "dt":         1e-8,
               "larmor":     gyro,              # bias frequency (Hz)
               "rabi":       1001,              # dressing amplitude (Hz/2)
@@ -118,7 +118,7 @@ if __name__ == "__main__":
               "xlamp":         0,              # amplitude of 
               "xlfreq":     1000,
               "xlphase":     0.0,
-              "zlamp":         1,
+              "zlamp":         0,
               "zlfreq":     1000,
               "zlphase":     0.0,
               "proj": meas1["0"],              # measurement projector
