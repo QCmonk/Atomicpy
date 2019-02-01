@@ -12,6 +12,15 @@ from IPython import embed
 from hashlib import blake2b
 import scipy.linalg as sla
 import matplotlib.pyplot as plt
+from math import floor, ceil
+from cmath import sqrt
+
+
+gR = []
+gI = []
+rR = []
+rI = []
+
 
 # import without warnings
 import warnings
@@ -29,6 +38,9 @@ else:
     archivepath = 'C:\\Users\\joshm\\Documents\\Projects\\Uni\\2017\\Research\\markovpy\\archive.hdf5'
 
 
+def absquare(z):
+    return z.real**2 + z.imag**2
+
 class SpinSystem(object):
     """
     class that defines a spin-[1/2, 1] system, keeping track of its state and evolution
@@ -38,21 +50,23 @@ class SpinSystem(object):
         # spin of system to be defined
         self.spin = spin
         # initial state of each particle [zero, one, super]
+        #can also specify as numpy array or list
         self.init = init
 
         if self.spin == "half":
             # dimension of system
             self.dim = 2
             # initial state
-            self.state = op1["pz"]
+            self.state = meas1["0"]
         elif self.spin == "one":
             # dimension of system
             self.dim = 3
             # initial state
-            self.state = op2["po"]
+            self.state = meas2["0"]
+            
 
         if self.init is not None:
-            if type(self.init) is str:
+            if type(self.init) is str and self.dim == 2:
                 if self.init is "super":
                     self.state = op1["h"] @ self.state
                 elif self.init is "isuper":
@@ -64,9 +78,22 @@ class SpinSystem(object):
                 else:
                     raise ValueError(
                         "Unrecognised initial state: {}".format(self.init))
+            elif type(self.init) is str and self.dim == 3:
+                
+                if self.init in meas2:
+                    self.state = meas2[self.init]
+                else:
+                    raise ValueError("Unrecognised initial state: {}".format(self.init))
             else:
                 # custom start state
-                self.state = np.matrix(self.init)
+                self.state = np.asarray(self.init)
+                self.normalise()
+                print(self.state)
+
+        if self.dim != np.size(self.state):
+            print('Error incorrect dimensions of specified state')
+            exit()
+
 
         self.state = np.copy(self.state)
 
@@ -79,7 +106,14 @@ class SpinSystem(object):
         """
         self.state = np.copy(self.init_state)
 
-
+    def normalise(self, state = None):
+        #normalises state vector or other vector given
+        if state == None:
+            self.state = self.state / np.linalg.norm(self.state)
+            state = self.state
+        else:
+            state = state / np.linalg.norm(state)
+        return state
 
     def evolve(self, unitary, save=False):
         """
@@ -100,68 +134,98 @@ class SpinSystem(object):
         if state is None:
             state = self.state
 
-        return np.abs(np.dot(project, state))**2
+        return absquare(np.dot(project.conjugate(), state))
 
-    def state_evolve(self, params, bloch=[False, 10], lite=False):
+    def state_evolve(self, params, bloch=[False, 10], lite=False, F=True):
         """
-        computes the probability of finding the system in the projection state over the given range
+        computes the <F> vector over the given range
         """
         # ensure dictionary meets C structure expectations
+        print('Energy levels for no oscillating field (Hz)', params["quad"]-params["larmor"], 0.0, params["quad"]+params["larmor"])
         cparams = dict_sanitise(params)
-
         if lite:
-            # run simulation using lite evolver (weird assignment errors if variable type changes from full version)
+            # run simulation using lite evolver
             
             self.probs = np.empty((1), dtype=np.float64)
-            self.state_cache = np.empty((2), dtype=np.complex128)
+            self.state_cache = np.empty((self.dim), dtype=np.complex128)
             self.state_cache[:] = self.state
-            quantumc.n_propagate_lite(cparams, self.state, self.state_cache, self.probs)
-            return [params["tend"]], self.probs
+
+            quantumc.n_propagate_lite(cparams, self.state, self.spin)
+            return [params["tend"]], self.state 
 
         # simulate and return evolution data
         else:
+            
             # time vector to evolve state over
             self.time = np.arange(cparams["tstart"],
-                              cparams["tend"], cparams["dt"])
-        
-
-            # preallocate probability array
-            self.probs = np.empty((len(self.time)), dtype=np.float64)
+                              cparams["tend"]+cparams["dt"]/2, cparams["dt"]*cparams["savef"])
+            
             # create list for snap shot states to plot
             if bloch:
                 bloch_points = []
             # initialise state cache
-            self.state_cache = np.empty((len(self.time), 2), dtype=np.complex128)
-            # set initial state
-            self.state_cache[0,:] = self.state
-            quantumc.n_propagateN(self.time, cparams, self.state,
-                                  self.state_cache, self.probs)
+            self.state_cache = np.empty((len(self.time), self.dim), dtype=np.complex128)
 
-            if params["savef"]>1:
+            # set initial state
+            self.state_cache[0,:] = self.state        
+            # preallocate probability array
+            #self.probs = np.empty((len(self.time)), dtype=np.float64)
+            if F:
+                self.F_cache = np.empty((len(self.time), 3), dtype=np.float64)
+                quantumc.n_propagateF(cparams, self.state_cache, self.F_cache, self.spin)
+            else:
+                self.probs = np.empty((len(self.time)), dtype=np.float64)
+                quantumc.n_propagateN(cparams, self.state_cache, self.probs, self.spin)
+
+            
+            '''import pstats, cProfile
+
+            cProfile.runctx("quantumc.n_propagateN(self.time, cparams, self.state_cache, self.probs, self.spin)", globals(), locals(), "Profile.prof")
+
+            s = pstats.Stats("Profile.prof")
+            s.strip_dirs().sort_stats("time").print_stats()
+            '''
+
+            
+            '''if params["savef"]>1:
                 self.probs = self.probs[::params["savef"]]
                 self.time = self.time[::params["savef"]]
-
-                    
+                    self.state_cache = self.state_cache[::params["savef"]]
+            '''
+            
             # plot evolution on the Bloch sphere
             if bloch[0]:
                 for state in self.state_cache[::bloch[1]]:
-                    state = np.matrix(state)
-                    bloch_points.append(self.get_bloch_vec(np.outer(state.H, state)))
+                    if self.spin == 'half':
+                        state = np.matrix(state)
+                        bloch_points.append(self.get_bloch_vec(np.outer(state.H, state)))
+                    elif self.spin == 'one':
+                        #for spin one stores list of bloch stars. Need to plot each separately
+                        bloch_points.append(getStars(state))
 
+                if self.spin == 'half':
+                    # convert to qutips format
+                    x, y, z = [], [], []
+                    for vec in bloch_points:
+                        x.append(vec[0])
+                        y.append(vec[1])
+                        z.append(vec[2])
+                    bloch_points = [x, y, z]
+                '''plt.figure()
+                plt.plot(rR,rI,'r+')
+                #plt.plot(gR,gI,'bd')                
+                plt.show()'''
 
-                # convert to qutips annoying format
-                # TODO: preallocate
-                x, y, z = [], [], []
-                for vec in bloch_points:
-                    x.append(vec[0])
-                    y.append(vec[1])
-                    z.append(vec[2])
+                if F: #F and bloch
+                    return self.time, self.F_cache, self.state_cache, bloch_points
+                else: #probs and bloch
+                    return self.time, self.probs, self.state_cache, bloch_points
+            elif F: #F and no bloch
+                return self.time, self.F_cache, self.state_cache
+            else: #probs and no bloch
+                return self.time, self.probs, self.state_cache
 
-                bloch_points = [x, y, z]
-                return self.time, self.probs, bloch_points
-            else:
-                return self.time, self.probs
-
+            
 
     def field_get(self,params):
         """
@@ -173,7 +237,7 @@ class SpinSystem(object):
         # compute time vector
         time = np.arange(cparams["tstart"],cparams["tend"],cparams["dt"])    
         # define bfield container
-        Bfields = np.empty((len(time),3), dtype=float)
+        Bfields = np.empty((len(time),4), dtype=float)
         # compute bfields
         quantumc.Bfield(time, cparams, Bfields)
         return time, cparams, Bfields
@@ -185,7 +249,7 @@ class SpinSystem(object):
         """
 
         # get time varying fields and simulation data
-        time,cparams,Bfields = field_get(params=params)
+        time,cparams,Bfields = self.field_get(params=params)
 
         # plot magnetic field vector on Bloch sphere
         if bloch[0]:
@@ -288,28 +352,72 @@ class SpinSystem(object):
             new_states = unitary_map(self.time[-1]) @ cstate
             return new_states
 
-    def bloch_plot(self, points=None):
+    def bloch_plot(self, points=None, F=None):
         """
         Plot the current state on the Bloch sphere using
         qutip. 
         """
-        if points is None:
-            # convert current state into density operator
-            rho = np.outer(self.state.H, self.state)
-            # get Bloch vector representation
-            points = self.get_bloch_vec(rho)
-            # Can only plot systems of dimension 2 at this time
-            assert len(
-                points) == 3, "System dimension must be spin 1/2 for Bloch sphere plot"
-
         # create instance of 3d plot
         bloch = Bloch(figsize=[9,9])
+        bloch.add_vectors([0,0,1])
+        bloch.xlabel = ['$<F_x>$','']
+        bloch.ylabel = ['$<F_y>$','']
+        bloch.zlabel = ['$<F_z>$','']
+        if self.spin == 'half':
+            if points is None:
+                # convert current state into density operator
+                rho = np.outer(self.state.H, self.state)
+                # get Bloch vector representation
+                points = self.get_bloch_vec(rho)
+                # Can only plot systems of dimension 2 at this time
+                assert len(
+                    points) == 3, "System dimension must be spin 1/2 for Bloch sphere plot"
+                    # create instance of 3d plot
+            bloch = Bloch(figsize=[9,9])
+        elif self.spin == 'one':
+            #points is list of items in format [[x1,x2],[y1,y2],[z1,z2]]
+            if points is None:
+                points = [getStars(self.state)]
+            bloch.point_color = ['g','r','b'] #ensures point and line are same colour
+            bloch.point_marker = ['o','d','o']
+            #bloch.point_color  = ['g','r'] #ensures point and line are same colour
+            #bloch.point_marker = ['o','d']
+            for p in points:
+                bloch.add_points([p[0][0],p[1][0],p[2][0]])
+                bloch.add_points([p[0][1],p[1][1],p[2][1]])
+                bloch.add_points(p, meth='l')
+            '''
+
+            bloch.point_color = ['b','b'] #ensures point and line are same colour
+            bloch.point_marker = ['o','o']
+            for p in points:
+                bloch.add_points(p)
+                bloch.add_points(p, meth='l')
+            '''
         # add state
-        bloch.add_points(points)
-        bloch.add_vectors([0,0,1]) 
-        bloch.render(bloch.fig, bloch.axes)
-        bloch.fig.savefig("bloch.png",dpi=600, transparent=True)
+        #bloch.render(bloch.fig, bloch.axes)
+        #bloch.fig.savefig("bloch.png",dpi=600, transparent=True)
         bloch.show()
+
+    def maj_vid(self, points):
+        #takes screenshots of majorana stars over time to produce vid
+        if points is None:
+            points = [getStars(self.state)]
+        i = 0
+        for p in points:
+            bloch = Bloch(figsize=[9,9])
+            bloch.xlabel = ['$<F_x>$','']
+            bloch.ylabel = ['$<F_y>$','']
+            bloch.zlabel = ['$<F_z>$','']
+            bloch.point_color = ['g','r','b'] #ensures point and line are same colour
+            bloch.point_marker = ['o','d','o']
+            bloch.add_points([p[0][0],p[1][0],p[2][0]])
+            bloch.add_points([p[0][1],p[1][1],p[2][1]])
+            bloch.add_points(p, meth='l')
+            bloch.render(bloch.fig, bloch.axes)
+            bloch.fig.savefig("bloch" + str(i).zfill(int(np.ceil(np.log10(len(points))))) + ".png",dpi=600, transparent=False)
+            i += 1
+
 
 
 
@@ -320,23 +428,127 @@ class SpinSystem(object):
         u = 2*np.real(rho[0, 1])
         v = 2*np.imag(rho[1, 0])
         w = np.real(rho[0, 0] - rho[1, 1])
-        return [u, v, w]
+        return [u, v, w]    
+    
+    def getExpVal(self,state,op):
+        #calculates expectation value of some operator
+        #operator must be hermitian to work properly and state must be of same dimension as operator
+        return (state.conjugate() @ (op @ state)).real
 
-    def exp_plot(self, time, probs, title="Expectation value over time"):
-        """
-        Formatted code for plot (why must plot code always be hideous?)
-        """
-        # compute expectation values
-        Fe = [2*p-1 for p in probs]
-        plt.figure(figsize=[12,8])
-        plt.plot(time, Fe)
-        plt.ylim([-1.05, 1.05])
-        plt.xlim([time[0], time[-1]])
-        plt.grid()
-        plt.xlabel("Time (s)")
-        plt.ylabel("Expectation Value")
-        plt.title(title)
-        plt.show()
+ 
+    def prob_plot(self, time=None, probs=None, title="Projection of state onto vector", xlabel = 'Time (s)', ylabel='Projection', xlim = None, ylim = None):
+        #formerly known as exp plot. 
+        # for proj vector specified at start of program calculates the probability of finding the system in that state
+        if time is None:
+            time = self.time
+        if probs is None:
+            probs = self.probs
+        if ylim is None:
+            ylim = [0, 1.05]
+        plotWizard(time, probs, xlabel, ylabel, title, xlim, ylim)
+
+
+    def proj_plot(self, time = None, stateV = None, proj = 'all', title="Projection of state onto vector", xlabel = 'Time (s)', ylabel='Projection', xlim = None, ylim = None, label = []):
+        #plots projection squared of vector
+        #same as prob plot except here projection onto any spinor can be specified
+        #use prob_plot for greater speed if you only want to check projection in one direction 
+        #if enter list of projection directions plots all on same axis
+        if time is None:
+            time = self.time
+        if stateV is None:
+            stateV = self.state_cache
+        if ylim is None:
+            ylim = [0,1.05] 
+
+        if proj == 'all':
+            if self.spin == 'half':
+                proj = [np.array([1,0]),np.array([0,1])]
+                label = ["|c_a|^2","|c_b|^2"]
+            elif self.spin == 'one':
+                proj = [np.array([1,0,0]),np.array([0,1,0]), np.array([0,0,1])]
+                label = ["|c_a|^2","|c_b|^2","|c_c|^2"]
+
+        if type(proj) != list:
+            proj = [proj]
+        
+        if type(label) != list:
+            if label is None:
+                label = []
+            else:
+                label = [label]
+
+
+        projVec = []
+        for p in proj:
+            projVec.append([self.measure(s, p) for s in stateV])
+            if len(label) < len(proj):
+                label.append(p)
+        
+        plotWizard(time, projVec, xlabel, ylabel, title, xlim, ylim, label)        
+
+    def norm_plot(self, time = None, stateV = None, op = 'z', title="Normalisation over time", xlabel = "Time (s)", ylabel="Normalisation", xlim = None, ylim = None, label=None):
+        if time is None:
+            time = self.time
+        if stateV is None:
+            stateV = self.state_cache
+        nm = [[self.measure(s, s) for s in stateV]]
+        plotWizard(time, nm, xlabel, ylabel, title, xlim, [0.0,1.05])        
+
+    def exp_plot(self, time = None, stateV = None, op = 'z', title="Expectation value over time", xlabel = "Time (s)", ylabel="Expectation Value", xlim = None, ylim = None, label=None):
+        # compute expectation values of specified operator
+        #sets operator matrix to correct matrix depending on spin
+        #defaults to checking z spin exp val
+        #if enter list of operators plots all on same axis
+        if time is None:
+            time = self.time
+        if stateV is None:
+            stateV = self.state_cache
+
+        if op == 'F':
+            op = ['x', 'y', 'z']
+            if self.spin == 'half':
+                if ylim is None:
+                    ylim = [-0.55,0.55]
+            elif self.spin == 'one':
+                if ylim is None:
+                    ylim = [-1.05,1.05]
+            label = ["<F_x>","<F_y>","<F_z>"]
+        
+        if type(op) != list:
+            op = [op]
+
+        if type(label) != list:
+            if label is None:
+                label = []
+            else:
+                label = [label]
+
+
+        expVec = []
+        for o in op:
+            if hasattr(self,'F_cache') and o == 'x':
+                expVec.append(self.F_cache[:,0])
+            elif hasattr(self,'F_cache') and o == 'y':
+                expVec.append(self.F_cache[:,1])
+            elif hasattr(self,'F_cache') and o == 'z':
+                expVec.append(self.F_cache[:,2])
+            else:
+                if self.spin == 'half':
+                    opM = op1[o]
+                elif self.spin == 'one':
+                    opM = op2[o]
+                expVec.append([self.getExpVal(s, opM) for s in stateV])
+            if len(label) < len(op):
+                label.append(o)
+
+        plotWizard(time, expVec, xlabel, ylabel, title, xlim, ylim, label)
+
+    def phase_plot(self, time = None, stateV = None, op = 'z', title="Phase over time"):
+        if time is None:
+            time = self.time
+        if stateV is None:
+            stateV = self.state_cache
+        plotWizard(time, np.angle(stateV), "Time (s)", "Complex phase", title)
 
     def bloch_animate(self, pnts, name="Bloch_animate"):
         """
@@ -733,10 +945,11 @@ def atomic_sense(sig_amp=100, tau=1e-4, sig_freq=1e4, f_range=[250, 450, 1], par
               "tend":        0.5, 
               "dt":         1e-8,
               "larmor":     gyro,               # bias frequency (Hz)
-              "phi":        0.0,                # phase shift (rad)
+              "phi":         0.0,               # phase shift (rad)
               "rabi":       1000,               # dressing amplitude (Hz/2)
               "rff":        gyro,               # dressing frequency (Hz)
-              "rph":        0,                  # dressing phase
+              "rph":           0,               # dressing phase
+              "quad":       0.0,
               "nf":         1e4,                # neural signal frequency (Hz)
               "dett":       0.1,                # detuning sweep start time
               "detA":       2000,               # detuning amplitude
@@ -810,6 +1023,105 @@ def atomic_sense(sig_amp=100, tau=1e-4, sig_freq=1e4, f_range=[250, 450, 1], par
 
     return np.asarray(freqs), np.asarray(projs), params
 
+def roundDir(n ,dir = 'u'):
+    #rounds number up or down at 2nd significant figure
+    # use 'u' to round up and 'd' to round down
+    sgn = 1
+    if n < 0:
+        sgn = -1
+
+    po = floor(np.log10(abs(n)))-1
+
+    if dir == 'u':
+        return sgn*ceil(n/10**po)*10**po
+    elif dir == 'd':
+        return sgn*floor(n/10**po)*10**po
+
+def plotWizard(x, y, xlabel=None, ylabel=None, title = None, xlim = None, ylim = None, label = []):
+    #If y is given as a list plots multiple lines for same x
+    #plots data with specified labels and headings      
+
+    if type(y) != list:
+        y = [y]
+    if type(label) != list:
+        label = [label]
+    if label != [] and len(y) != len(label):
+        print('Invalid number of labels')
+        return
+
+
+
+    if xlim is None:
+        xlim = [x[0], x[-1]]      
+    if ylim is None:
+        miny = np.inf
+        maxy = -np.inf
+        for l in y:
+            minl = min(l)
+            maxl = max(l)
+            if minl < miny:
+                miny = minl
+            if maxl < maxy:
+                maxy = maxl
+        ylim = [roundDir(miny,'d'), roundDir(maxy,'u')]
+    
+    plt.figure(figsize=[12,8])
+    for pts in y:
+        plt.plot(x, pts)
+
+    plt.legend(label)
+    plt.ylim(ylim)
+    plt.xlim(xlim)
+    plt.grid()
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.show()   
+
+
+
+def getStars(vec):
+    tol = 1e-8
+    #converts 3-spinor into two stars
+    roots = np.empty(2, dtype=np.complex128)
+    stars = [[],[],[]] #stores x, y and z coordinates
+    vec[1] *= -sqrt2
+    delta = vec[1]**2-4*vec[0]*vec[2]
+    if abs(vec[0]) <= tol:
+        roots[0] = np.inf
+        if abs(vec[1]) <= tol:
+            roots[1] = np.inf
+        else:
+            roots[1] = -vec[2]/vec[1]
+    else:
+        #roots[0] = 0.5*(-vec[1] + sqrt(delta))/vec[0]
+        if delta.imag >= 0: #ensures stars don't switch due to branch cut
+            roots[0] = 0.5*(-vec[1] + sqrt(delta))/vec[0]
+        else:
+            roots[0] = -0.5*(vec[1] + sqrt(delta))/vec[0]
+        roots[1] = -vec[1]/vec[0] - roots[0]
+    vec[1] *= -invsqrt2 #reverts vec[1] to original number
+    for r in roots:
+        if r == np.inf:
+            stars[0].append(0)
+            stars[1].append(0)
+            stars[2].append(-1)            
+        else:
+            x = r.real
+            y = r.imag
+            den = 1/(1.+(x**2)+(y**2))
+            stars[0].append(2*x*den)    
+            stars[1].append(2*y*den)
+            stars[2].append((1.-(x**2)-(y**2))*den)    
+
+    if abs(roots[0]) < abs(roots[1]):
+        #print(roots, vec)
+        rR.append(delta.real)
+        rI.append(delta.imag)
+    else:
+        gR.append(delta.real)
+        gI.append(delta.imag)
+    return stars
 
 
 ## DEFUNCT WITH NEW SIMULATION SCHEME ##
@@ -921,4 +1233,3 @@ def demonstrate(in_vars):
 
     bfreqs1, projs1 = recon_pulse(sim_vars, plot=True, savefig=False)
     
-
